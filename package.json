@@ -1,0 +1,32 @@
+{
+  "name": "kulvriksh-platform",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Kulvriksh Digital Platform monorepo: Next.js web app, Express API and shared contracts.",
+  "packageManager": "npm@11.6.2",
+  "engines": {
+    "node": ">=24.0.0 <25.0.0",
+    "npm": ">=11.0.0"
+  },
+  "workspaces": [
+    "packages/shared",
+    "apps/api",
+    "apps/web"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev -w @kulvriksh/web",
+    "dev:api": "npm run dev -w @kulvriksh/api",
+    "build": "npm run build --workspaces --if-present",
+    "start:web": "npm run start -w @kulvriksh/web",
+    "start:api": "npm run start -w @kulvriksh/api",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "check": "npm run typecheck && npm run lint && npm run build"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.5",
+    "eslint": "9.39.5",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.2"
+  }
+}

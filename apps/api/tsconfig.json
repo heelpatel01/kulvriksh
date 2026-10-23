@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+    "rootDir": "src",
+    "outDir": "dist",
+    // Source files import each other with .ts extensions so Node.js can run them directly
+    // in development (type stripping); the build rewrites those imports to .js.
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    // Only syntax that Node.js type stripping can erase (no enums, namespaces, parameter properties).
+    "erasableSyntaxOnly": true,
+    "sourceMap": true
+  },
+  "include": ["src"]
+}

@@ -1,0 +1,17 @@
+{
+  "name": "@kulvriksh/shared",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Types and contracts shared by the Kulvriksh web app and API. Type-only for now; no runtime code.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint ."
+  }
+}

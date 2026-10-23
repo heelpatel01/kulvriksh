@@ -1,0 +1,4 @@
+# Store and check out text files with LF line endings on every platform.
+# The project is developed on Windows (where Git is configured with core.autocrlf=true)
+# and will run on a Linux VPS; this keeps line endings consistent regardless of local Git settings.
+* text=auto eol=lf
