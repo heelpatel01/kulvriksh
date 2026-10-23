@@ -81,7 +81,14 @@ The health endpoint only reports that the API process is running. It does **not*
 | `API_HOST` | `127.0.0.1` | |
 | `API_PORT` | `4000` | An invalid value stops the API at startup |
 
-**Web:** no environment variables are needed yet.
+**Web:** no application settings are needed yet. The web app listens on port `3000` by default. To use another port, set `PORT` before starting it:
+
+```bash
+# PowerShell:  $env:PORT=3001; npm run dev:web
+# Git Bash:    PORT=3001 npm run dev:web
+```
+
+Extra arguments after `--` are not forwarded by the root scripts, so use `PORT` (web) or `API_PORT` (API) instead.
 
 **Next.js telemetry:** Next.js sends anonymous usage telemetry by default. To opt out on your machine, set `NEXT_TELEMETRY_DISABLED=1` in your environment, or run `npx next telemetry disable` in `apps/web`. That changes only your local Next.js settings.
 
