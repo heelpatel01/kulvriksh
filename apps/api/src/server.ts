@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { createApp } from './app.ts';
 import { ConfigError, loadConfig, type ApiConfig } from './config.ts';
+import { createLogger } from './logger.ts';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -9,7 +10,7 @@ function readConfig(): ApiConfig {
     return loadConfig();
   } catch (err) {
     if (err instanceof ConfigError) {
-      console.error(`[api] configuration error: ${err.message}`);
+      createLogger({ level: 'error' }).error('configuration error', { issues: err.issues });
       process.exit(1);
     }
     throw err;
@@ -17,44 +18,55 @@ function readConfig(): ApiConfig {
 }
 
 const config = readConfig();
+const logger = createLogger({ level: config.logLevel, bindings: { service: 'kulvriksh-api' } });
 
 // An explicit http.Server is used because Express 5's app.listen() also calls its callback
 // on failure (e.g. EADDRINUSE). server.listen() calls it only once listening has succeeded.
-const server = createServer(createApp());
+const server = createServer(createApp({ logger }));
 
 server.on('error', (err) => {
-  console.error(`[api] server error: ${err.message}`);
+  logger.error('server error', { err });
   process.exit(1);
 });
 
 server.listen(config.port, config.host, () => {
-  console.log(`[api] listening on http://${config.host}:${config.port}`);
+  logger.info('listening', { url: `http://${config.host}:${config.port}`, nodeEnv: config.nodeEnv });
 });
 
 let shuttingDown = false;
 
-function shutdown(signal: NodeJS.Signals): void {
+function shutdown(reason: string, exitCode: number): void {
   if (shuttingDown) {
     return;
   }
   shuttingDown = true;
-  console.log(`[api] ${signal} received, closing server`);
+  logger.info('shutting down', { reason });
 
   const forceExit = setTimeout(() => {
-    console.error('[api] shutdown timed out, exiting');
+    logger.error('shutdown timed out, exiting');
     process.exit(1);
   }, SHUTDOWN_TIMEOUT_MS);
   forceExit.unref();
 
   server.close((err) => {
     if (err) {
-      console.error(`[api] error while closing: ${err.message}`);
+      logger.error('error while closing', { err });
       process.exit(1);
     }
-    process.exit(0);
+    process.exit(exitCode);
   });
   server.closeIdleConnections();
 }
 
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+process.on('SIGTERM', () => shutdown('SIGTERM', 0));
+process.on('SIGINT', () => shutdown('SIGINT', 0));
+
+// After an unexpected error the process state is unknown: log it, stop accepting work, exit non-zero.
+process.on('uncaughtException', (err) => {
+  logger.error('uncaught exception', { err });
+  shutdown('uncaughtException', 1);
+});
+process.on('unhandledRejection', (reason) => {
+  logger.error('unhandled promise rejection', { err: reason });
+  shutdown('unhandledRejection', 1);
+});

@@ -1,0 +1,6 @@
+{
+  // Production build: compile the API without tests or test helpers.
+  // Type-checking (tsconfig.json) still covers them.
+  "extends": "./tsconfig.json",
+  "exclude": ["src/**/*.test.ts", "src/testing"]
+}

@@ -7,7 +7,13 @@ Monorepo for the Kulvriksh Digital Platform, developed by Cortax IT Solutions fo
 **Milestone M0 — repository and governance foundation.** It contains only:
 
 - `apps/web`: a minimal Next.js placeholder page with provisional design tokens
-- `apps/api`: a minimal Express API with a health endpoint
+- `apps/api`: a minimal Express API with a health endpoint. Its foundation (M1, TASK-04, under review) adds:
+  - validated configuration
+  - structured JSON logging with secret redaction
+  - request IDs
+  - security headers
+  - a consistent error envelope
+  - tests
 - `packages/shared`: shared TypeScript contracts (type-only)
 
 **Not implemented yet:** database, Prisma schema and migrations, authentication, OTP, payments, family workspaces and tree, media, research, notifications, the admin and genealogist portals, the public website, and deployment.
@@ -70,7 +76,8 @@ The health endpoint only reports that the API process is running. It does **not*
 | `npm run start:web` / `npm run start:api` | Run the production builds (run `npm run build` first) |
 | `npm run typecheck` | Type-check every workspace |
 | `npm run lint` | Lint every workspace with ESLint |
-| `npm run check` | Type-check, lint and build |
+| `npm run test` | Run the tests: the API uses Node's built-in test runner on its `src/**/*.test.ts` files |
+| `npm run check` | Type-check, lint, test and build |
 
 ## Configuration
 
@@ -78,8 +85,21 @@ The health endpoint only reports that the API process is running. It does **not*
 
 | Variable | Default | Notes |
 |---|---|---|
+| `NODE_ENV` | `development` | `development`, `test` or `production` |
 | `API_HOST` | `127.0.0.1` | |
-| `API_PORT` | `4000` | An invalid value stops the API at startup |
+| `API_PORT` | `4000` | |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` or `silent` |
+
+Any invalid value stops the API at startup with one structured error that lists every problem.
+
+**API logs:**
+- **Format:** one JSON object per line. `warn` and `error` go to stderr; everything else goes to stdout.
+- **Redaction:** values of fields whose names look sensitive (password, secret, token, cookie, authorization, signature, OTP and similar) are replaced with `[REDACTED]`.
+- **Access log:** one line per request, with the path but never the query string.
+
+**Request IDs and errors:**
+- Every response carries a server-generated `X-Request-Id` header.
+- Error responses use `{"error":{"code","message","requestId"}}`. The `requestId` is the reference to quote when reporting a problem.
 
 **Web:** no application settings are needed yet. The web app listens on port `3000` by default. To use another port, set `PORT` before starting it:
 
