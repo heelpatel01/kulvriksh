@@ -77,13 +77,19 @@ const ADVERSARIAL: ReadonlyArray<readonly [string, string]> = [
   ['"token" + 50 spaces x36', `token${' '.repeat(50)}`.repeat(36)],
 ];
 const ADVERSARIAL_LIMIT_MS = 50;
+// Backtracking is slow on every run; CPU contention from parallel test files is not. The fastest
+// of a few runs therefore keeps the regression signal without failing on a busy machine.
+const RUNS = 3;
 
 test('scrubText stays fast on adversarial inputs (ReDoS regression)', () => {
   for (const [name, input] of ADVERSARIAL) {
-    const started = process.hrtime.bigint();
-    scrubText(input);
-    const ms = Number(process.hrtime.bigint() - started) / 1e6;
-    assert.ok(ms < ADVERSARIAL_LIMIT_MS, `${name} took ${ms.toFixed(1)} ms`);
+    let fastest = Infinity;
+    for (let run = 0; run < RUNS; run += 1) {
+      const started = process.hrtime.bigint();
+      scrubText(input);
+      fastest = Math.min(fastest, Number(process.hrtime.bigint() - started) / 1e6);
+    }
+    assert.ok(fastest < ADVERSARIAL_LIMIT_MS, `${name} took ${fastest.toFixed(1)} ms (fastest of ${RUNS})`);
   }
 });
 

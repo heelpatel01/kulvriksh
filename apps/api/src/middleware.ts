@@ -52,8 +52,8 @@ export function accessLog(logger: Logger): RequestHandler {
       durationMs: Math.round(Number(process.hrtime.bigint() - started) / 1e5) / 10,
     });
     res.on('finish', () => {
-      // Health probes run frequently; keep them out of the info-level log.
-      if (path === '/health') {
+      // Health and readiness probes run frequently; keep them out of the info-level log.
+      if (path === '/health' || path === '/ready') {
         logger.debug('request completed', fields());
       } else {
         logger.info('request completed', fields());

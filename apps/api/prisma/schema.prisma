@@ -1,0 +1,810 @@
+// Kulvriksh database schema. Change it only through Prisma migrations (`prisma migrate`),
+// never `prisma db push`. Only data-model entities with a confirmed basis are added here;
+// every other entity waits for data-model approval (CP2).
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+}
+
+// Connection strings come from prisma.config.ts (migrations) and the API's DATABASE_URL (runtime).
+datasource db {
+  provider = "postgresql"
+}
+
+/// Service status (docs/02-DATA-MODEL.md §6.1). Inactive services are never shown publicly (AS-PUB-07).
+enum ServiceStatus {
+  active
+  inactive
+
+  @@map("service_status")
+}
+
+/// A sellable offering (DM §6.1; approved scope item 3). Descriptive fields are placeholders until
+/// R12 is confirmed: name and description are the examples the data model gives. Plans, prices
+/// and entitlements (R12–R14) are deliberately not modelled yet.
+model Service {
+  id          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// New services start inactive, so nothing appears publicly until an admin activates it.
+  status      ServiceStatus @default(inactive)
+  name        String
+  description String
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  plans       Plan[]
+
+  @@index([status])
+  @@map("service")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Customer authentication (docs/02-DATA-MODEL.md §5). Values that are still TBC (FQ-1 to FQ-4)
+// live in configuration, not here. Database-level guards that Prisma cannot express (partial
+// unique index, CHECK constraints) are added in the migration SQL.
+// ---------------------------------------------------------------------------------------------
+
+/// One role per account (DM §5.1, proposed; DQ-1 open).
+enum UserRole {
+  customer
+  genealogist
+  admin
+
+  @@map("user_role")
+}
+
+/// Account states with a confirmed basis (DM §5.6). `suspended` (R35) and `deleted` (R10) are
+/// deliberately absent until decided.
+enum UserStatus {
+  active
+  deactivated
+
+  @@map("user_status")
+}
+
+/// Why a session ended (DM §5.4). `suspended` is omitted until R35 adopts suspension.
+enum SessionRevokeReason {
+  logout
+  expired
+  deactivated
+  admin_action
+
+  @@map("session_revoke_reason")
+}
+
+model AppUser {
+  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  role            UserRole
+  status          UserStatus       @default(active)
+  statusChangedAt DateTime?        @map("status_changed_at") @db.Timestamptz(6)
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  customerProfile CustomerProfile?
+  staffProfile    StaffProfile?
+  staffCredential StaffCredential?
+  sessions        Session[]
+  workspace       FamilyWorkspace?
+  assignments     Assignment[]     @relation("AssignmentGenealogist")
+  auditEvents     AuditEvent[]
+  staffTokens     StaffToken[]
+  staffMfa        StaffMfa?
+  notifications   Notification[]
+  orders          CustomerOrder[]
+  entitlements    Entitlement[]
+  exportJobs      ExportJob[]
+
+  @@map("app_user")
+}
+
+/// Profile fields beyond the mobile number are a placeholder until R8 is resolved.
+model CustomerProfile {
+  userId       String   @id @map("user_id") @db.Uuid
+  /// Normalised by the API (E.164). Format and countries are provisional (FQ-1).
+  mobileNumber String   @unique @map("mobile_number")
+  /// Optional name the customer wants to be greeted by: the only R8 field implemented so far.
+  displayName  String?  @map("display_name")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user         AppUser  @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@map("customer_profile")
+}
+
+/// Server-side session row (DM §5.4). Only a SHA-256 hash of the cookie token is stored.
+model Session {
+  id           String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String               @map("user_id") @db.Uuid
+  tokenHash    String               @unique @map("token_hash")
+  createdAt    DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  lastSeenAt   DateTime             @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  expiresAt    DateTime             @map("expires_at") @db.Timestamptz(6)
+  revokedAt    DateTime?            @map("revoked_at") @db.Timestamptz(6)
+  revokeReason SessionRevokeReason? @map("revoke_reason")
+  user         AppUser              @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("session")
+}
+
+/// One-time code challenge (DM §5.5). The code itself is never stored: only
+/// HMAC-SHA-256(otp key, id || code). No FK to the account, which may not exist yet (FQ-2).
+model OtpChallenge {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  mobileNumber  String    @map("mobile_number")
+  codeHash      String    @map("code_hash")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt     DateTime  @map("expires_at") @db.Timestamptz(6)
+  attemptCount  Int       @default(0) @map("attempt_count")
+  consumedAt    DateTime? @map("consumed_at") @db.Timestamptz(6)
+  invalidatedAt DateTime? @map("invalidated_at") @db.Timestamptz(6)
+
+  @@index([mobileNumber, createdAt])
+  @@index([expiresAt])
+  @@map("otp_challenge")
+}
+
+/// Fixed-window rate-limit counter. The key is an HMAC; no raw IP or number is stored.
+model RateLimitBucket {
+  bucketKey   String   @id @map("bucket_key")
+  windowStart DateTime @map("window_start") @db.Timestamptz(6)
+  count       Int
+  expiresAt   DateTime @map("expires_at") @db.Timestamptz(6)
+
+  @@index([expiresAt])
+  @@map("rate_limit_bucket")
+}
+
+/// Per-number lockout after repeated wrong codes. The key is an HMAC; no raw number is stored.
+model AuthLockout {
+  subjectKey  String   @id @map("subject_key")
+  lockedUntil DateTime @map("locked_until") @db.Timestamptz(6)
+  reason      String
+  updatedAt   DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@index([lockedUntil])
+  @@map("auth_lockout")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Staff identity (DM §5.3). The sign-in method is TBC (R9). The provisional method is an email
+// address and a scrypt password hash, kept in its own table so it can be replaced later.
+// ---------------------------------------------------------------------------------------------
+
+model StaffProfile {
+  userId      String   @id @map("user_id") @db.Uuid
+  displayName String   @map("display_name")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user        AppUser  @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@map("staff_profile")
+}
+
+/// Provisional (R9). Only a scrypt hash of the password is stored.
+model StaffCredential {
+  userId            String   @id @map("user_id") @db.Uuid
+  email             String   @unique
+  /// Null until the person completes the one-time setup link (no default passwords).
+  passwordHash      String?  @map("password_hash")
+  passwordChangedAt DateTime @default(now()) @map("password_changed_at") @db.Timestamptz(6)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user              AppUser  @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@map("staff_credential")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Family workspaces (DM §7.1–7.3). Private to the owner (D1). Fields are minimal until R17/R18.
+// ---------------------------------------------------------------------------------------------
+
+/// The tenant root. One per customer for now (FQ-8); dropping the unique owner later is easy.
+model FamilyWorkspace {
+  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerUserId     String           @unique @map("owner_user_id") @db.Uuid
+  name            String
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  owner           AppUser          @relation(fields: [ownerUserId], references: [id], onDelete: Restrict)
+  members         FamilyMember[]
+  relationships   Relationship[]
+  assignments     Assignment[]
+  researchRecords ResearchRecord[]
+  reports         Report[]
+  files           StoredFile[]
+  mediaItems      MediaItem[]
+  exportJobs      ExportJob[]
+
+  @@map("family_workspace")
+}
+
+/// Fields are a placeholder (R17): only the searchable name that the spec requires.
+model FamilyMember {
+  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId     String          @map("workspace_id") @db.Uuid
+  displayName     String          @map("display_name")
+  version         Int             @default(1)
+  createdByUserId String          @map("created_by_user_id") @db.Uuid
+  updatedByUserId String?         @map("updated_by_user_id") @db.Uuid
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace       FamilyWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  relationshipsA  Relationship[]  @relation("RelationshipMemberA")
+  relationshipsB  Relationship[]  @relation("RelationshipMemberB")
+
+  @@unique([id, workspaceId])
+  @@index([workspaceId, displayName])
+  /// Trigram index for case-insensitive name search (pg_trgm, created in the TASK-10 migration).
+  @@index([displayName(ops: raw("gin_trgm_ops"))], type: Gin, map: "member_display_name_trgm")
+  @@map("member")
+}
+
+/// Types are provisional (R18): parent_of (directed, acyclic) and spouse_of (symmetric, stored
+/// with member_a_id < member_b_id). Composite keys keep both members in the same workspace.
+model Relationship {
+  id               String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId      String          @map("workspace_id") @db.Uuid
+  memberAId        String          @map("member_a_id") @db.Uuid
+  memberBId        String          @map("member_b_id") @db.Uuid
+  relationshipType String          @map("relationship_type")
+  createdByUserId  String          @map("created_by_user_id") @db.Uuid
+  createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  workspace        FamilyWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  memberA          FamilyMember    @relation("RelationshipMemberA", fields: [memberAId, workspaceId], references: [id, workspaceId], onDelete: Restrict)
+  memberB          FamilyMember    @relation("RelationshipMemberB", fields: [memberBId, workspaceId], references: [id, workspaceId], onDelete: Restrict)
+
+  @@unique([workspaceId, memberAId, memberBId, relationshipType])
+  @@index([workspaceId, memberBId])
+  @@map("relationship")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Research (DM §8). An assignment gives one genealogist access to a whole workspace (R28 (a)).
+// ---------------------------------------------------------------------------------------------
+
+/// Removed rows are kept for history. At most one active assignment per workspace (R29 default,
+/// a partial unique index in the migration).
+model Assignment {
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String          @map("workspace_id") @db.Uuid
+  genealogistUserId String          @map("genealogist_user_id") @db.Uuid
+  assignedByUserId  String          @map("assigned_by_user_id") @db.Uuid
+  assignedAt        DateTime        @default(now()) @map("assigned_at") @db.Timestamptz(6)
+  removedAt         DateTime?       @map("removed_at") @db.Timestamptz(6)
+  removedByUserId   String?         @map("removed_by_user_id") @db.Uuid
+  workspace         FamilyWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  genealogist       AppUser         @relation("AssignmentGenealogist", fields: [genealogistUserId], references: [id], onDelete: Restrict)
+
+  @@index([workspaceId])
+  @@map("assignment")
+}
+
+/// Fields are a placeholder (R31): a note or a source reference, as text.
+model ResearchRecord {
+  id           String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId  String          @map("workspace_id") @db.Uuid
+  authorUserId String          @map("author_user_id") @db.Uuid
+  kind         String
+  body         String
+  version      Int             @default(1)
+  createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace    FamilyWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+
+  @@unique([id, workspaceId])
+  @@index([workspaceId, createdAt])
+  @@map("research_record")
+}
+
+/// Working set of states (R32): approval and release are one step until decided.
+enum ReportStatus {
+  draft
+  submitted
+  returned
+  released
+
+  @@map("report_status")
+}
+
+/// Content is in-platform text for now (R31: generated, uploaded or both is TBC).
+model Report {
+  id               String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId      String          @map("workspace_id") @db.Uuid
+  authorUserId     String          @map("author_user_id") @db.Uuid
+  status           ReportStatus    @default(draft)
+  title            String
+  body             String
+  version          Int             @default(1)
+  submittedAt      DateTime?       @map("submitted_at") @db.Timestamptz(6)
+  returnedAt       DateTime?       @map("returned_at") @db.Timestamptz(6)
+  returnedByUserId String?         @map("returned_by_user_id") @db.Uuid
+  returnReason     String?         @map("return_reason")
+  releasedAt       DateTime?       @map("released_at") @db.Timestamptz(6)
+  releasedByUserId String?         @map("released_by_user_id") @db.Uuid
+  createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  /// Optional uploaded report file (R31). Composite key: the file must belong to the same workspace.
+  reportFileId     String?         @map("report_file_id") @db.Uuid
+  workspace        FamilyWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  reportFile       StoredFile?     @relation("ReportFile", fields: [reportFileId, workspaceId], references: [id, workspaceId], onDelete: Restrict)
+
+  @@unique([reportFileId, workspaceId])
+  @@index([workspaceId, status])
+  @@index([status, submittedAt])
+  @@map("report")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Audit (DM §9.4). Append-only for the runtime role: the migration revokes UPDATE and DELETE.
+// ---------------------------------------------------------------------------------------------
+
+enum AuditOutcome {
+  success
+  failure
+
+  @@map("audit_outcome")
+}
+
+model AuditEvent {
+  id          BigInt       @id @default(autoincrement())
+  occurredAt  DateTime     @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  actorUserId String?      @map("actor_user_id") @db.Uuid
+  actorRole   String       @map("actor_role")
+  action      String
+  targetType  String       @map("target_type")
+  targetId    String       @map("target_id")
+  /// No FK, so audit outlives any future deletion policy (R10).
+  workspaceId String?      @map("workspace_id") @db.Uuid
+  outcome     AuditOutcome
+  details     Json?
+  requestId   String?      @map("request_id")
+  actor       AppUser?     @relation(fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([occurredAt])
+  @@index([action, occurredAt])
+  @@index([actorUserId, occurredAt])
+  @@map("audit_event")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Staff account lifecycle (TASK-10). One-time tokens for account setup, password reset and the
+// second sign-in step; only their SHA-256 hash is stored. TOTP secrets are stored encrypted.
+// ---------------------------------------------------------------------------------------------
+
+enum StaffTokenPurpose {
+  setup
+  reset
+  mfa_challenge
+
+  @@map("staff_token_purpose")
+}
+
+model StaffToken {
+  id              String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId          String            @map("user_id") @db.Uuid
+  purpose         StaffTokenPurpose
+  tokenHash       String            @unique @map("token_hash")
+  attemptCount    Int               @default(0) @map("attempt_count")
+  createdByUserId String?           @map("created_by_user_id") @db.Uuid
+  createdAt       DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt       DateTime          @map("expires_at") @db.Timestamptz(6)
+  usedAt          DateTime?         @map("used_at") @db.Timestamptz(6)
+  user            AppUser           @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, purpose])
+  @@index([expiresAt])
+  @@map("staff_token")
+}
+
+/// TOTP second factor (R34 open: TOTP is the provisional method). The secret is AES-256-GCM
+/// encrypted with STAFF_MFA_KEY; last_used_step blocks replay of a code within its window.
+model StaffMfa {
+  userId           String    @id @map("user_id") @db.Uuid
+  secretCiphertext String    @map("secret_ciphertext")
+  enabledAt        DateTime? @map("enabled_at") @db.Timestamptz(6)
+  lastUsedStep     BigInt?   @map("last_used_step")
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user             AppUser   @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@map("staff_mfa")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Notifications (DM §9.3, Flows F-NOT-01): an outbox written in the triggering transaction.
+// Events and channels are TBC (R36). `in_app` is the customer's inbox and needs no provider;
+// `email` and `sms` records are dispatched through a provider interface (none configured, R37).
+// Templates are code-defined (version 1) until the notification_template table is approved.
+// ---------------------------------------------------------------------------------------------
+
+enum NotificationChannel {
+  in_app
+  email
+  sms
+
+  @@map("notification_channel")
+}
+
+enum NotificationStatus {
+  queued
+  sending
+  sent
+  failed
+
+  @@map("notification_status")
+}
+
+model Notification {
+  id                String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  eventKey          String              @map("event_key")
+  channel           NotificationChannel
+  templateVersion   Int                 @default(1) @map("template_version")
+  recipientUserId   String              @map("recipient_user_id") @db.Uuid
+  /// Needed only for email/sms; never set for in_app. Personal data (DM §12).
+  recipientAddress  String?             @map("recipient_address")
+  title             String
+  renderedBody      String              @map("rendered_body")
+  sourceType        String              @map("source_type")
+  sourceId          String              @map("source_id") @db.Uuid
+  /// No FK, like audit: the notification may outlive a future deletion policy (R10).
+  workspaceId       String?             @map("workspace_id") @db.Uuid
+  dedupeKey         String              @unique @map("dedupe_key")
+  status            NotificationStatus  @default(queued)
+  attemptCount      Int                 @default(0) @map("attempt_count")
+  nextAttemptAt     DateTime            @default(now()) @map("next_attempt_at") @db.Timestamptz(6)
+  leaseToken        String?             @map("lease_token") @db.Uuid
+  leaseExpiresAt    DateTime?           @map("lease_expires_at") @db.Timestamptz(6)
+  providerMessageId String?             @map("provider_message_id")
+  lastErrorCode     String?             @map("last_error_code")
+  sentAt            DateTime?           @map("sent_at") @db.Timestamptz(6)
+  readAt            DateTime?           @map("read_at") @db.Timestamptz(6)
+  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  recipient         AppUser             @relation(fields: [recipientUserId], references: [id], onDelete: Restrict)
+  attempts          NotificationAttempt[]
+
+  @@index([recipientUserId, channel, createdAt])
+  @@map("notification")
+}
+
+model NotificationAttempt {
+  id                   String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  notificationId       String       @map("notification_id") @db.Uuid
+  attemptNo            Int          @map("attempt_no")
+  startedAt            DateTime     @default(now()) @map("started_at") @db.Timestamptz(6)
+  finishedAt           DateTime?    @map("finished_at") @db.Timestamptz(6)
+  outcome              String?
+  providerResponseCode String?      @map("provider_response_code")
+  notification         Notification @relation(fields: [notificationId], references: [id], onDelete: Restrict)
+
+  @@unique([notificationId, attemptNo])
+  @@map("notification_attempt")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Files (DM §7.4, §7.5). stored_file is the only link to bytes; a row exists only after the bytes
+// are committed to storage. media_item is metadata; content goes through a separate access check.
+// ---------------------------------------------------------------------------------------------
+
+enum StoredFileKind {
+  media
+  report
+  export_pdf
+
+  @@map("stored_file_kind")
+}
+
+enum StoredFileStatus {
+  committed
+  pending_deletion
+
+  @@map("stored_file_status")
+}
+
+model StoredFile {
+  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId     String           @map("workspace_id") @db.Uuid
+  kind            StoredFileKind
+  storageBackend  String           @map("storage_backend")
+  /// Server-generated, never shown to users, never derived from a file name.
+  storageKey      String           @unique @map("storage_key")
+  contentType     String           @map("content_type")
+  byteSize        BigInt           @map("byte_size")
+  checksumSha256  String           @map("checksum_sha256")
+  status          StoredFileStatus @default(committed)
+  createdByUserId String           @map("created_by_user_id") @db.Uuid
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace       FamilyWorkspace  @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  mediaItem       MediaItem?       @relation("MediaFile")
+  report          Report?          @relation("ReportFile")
+  exportJob       ExportJob?       @relation("ExportFile")
+
+  @@unique([id, workspaceId])
+  @@index([workspaceId, kind])
+  @@map("stored_file")
+}
+
+/// Media types are confirmed (scope 5); the allowed formats are R23's decision (configuration).
+enum MediaType {
+  photo
+  document
+  voice
+  tts_audio
+
+  @@map("media_type")
+}
+
+/// Linked to the workspace only (FQ-9 option a); member linkage waits for FQ-9.
+model MediaItem {
+  id               String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId      String          @map("workspace_id") @db.Uuid
+  fileId           String          @map("file_id") @db.Uuid
+  mediaType        MediaType       @map("media_type")
+  originalFilename String?         @map("original_filename")
+  uploadedByUserId String          @map("uploaded_by_user_id") @db.Uuid
+  createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace        FamilyWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  file             StoredFile      @relation("MediaFile", fields: [fileId, workspaceId], references: [id, workspaceId], onDelete: Restrict)
+
+  @@unique([id, workspaceId])
+  /// One media item per file (DM §7.5); the file is unique on its own, so this is equivalent.
+  @@unique([fileId, workspaceId])
+  @@index([workspaceId, createdAt])
+  @@map("media_item")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Catalogue, orders, payments and entitlements (DM §6, Flows §5). One-time plans only: recurring
+// plans are outside the current design (R13). Prices are entered by admins (R12); which features a
+// plan unlocks is a list of entitlement keys (R14 working model, option b). Refunds are excluded (D3).
+// ---------------------------------------------------------------------------------------------
+
+enum PlanStatus {
+  active
+  inactive
+
+  @@map("plan_status")
+}
+
+model Plan {
+  id           String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  serviceId    String            @map("service_id") @db.Uuid
+  /// New plans start inactive; inactive plans cannot be ordered (AS-ORD-03).
+  status       PlanStatus        @default(inactive)
+  /// Descriptive fields are placeholders until R12.
+  name         String
+  description  String            @default("")
+  priceMinor   BigInt            @map("price_minor")
+  currency     String
+  createdAt    DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  service      Service           @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  entitlements PlanEntitlement[]
+  orders       CustomerOrder[]
+
+  @@index([serviceId, status])
+  @@map("plan")
+}
+
+model PlanEntitlement {
+  planId         String @map("plan_id") @db.Uuid
+  entitlementKey String @map("entitlement_key")
+  plan           Plan   @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  @@id([planId, entitlementKey])
+  @@map("plan_entitlement")
+}
+
+enum OrderStatus {
+  created
+  pending
+  paid
+  failed
+
+  @@map("order_status")
+}
+
+enum OrderAttentionReason {
+  amount_mismatch
+  unreconciled
+
+  @@map("order_attention_reason")
+}
+
+/// The id is generated by the API before the provider order is created (DM §6.2).
+model CustomerOrder {
+  id                     String                @id @db.Uuid
+  customerUserId         String                @map("customer_user_id") @db.Uuid
+  planId                 String                @map("plan_id") @db.Uuid
+  idempotencyKey         String                @map("idempotency_key")
+  /// razorpay | development. DM §6.2 names the column razorpay_order_id; kept provider-neutral.
+  provider               String
+  providerOrderId        String                @unique @map("provider_order_id")
+  status                 OrderStatus           @default(created)
+  amountMinor            BigInt                @map("amount_minor")
+  currency               String
+  planSnapshot           Json                  @map("plan_snapshot")
+  paidAt                 DateTime?             @map("paid_at") @db.Timestamptz(6)
+  attentionReason        OrderAttentionReason? @map("attention_reason")
+  reconcileLastCheckedAt DateTime?             @map("reconcile_last_checked_at") @db.Timestamptz(6)
+  reconcileCheckCount    Int                   @default(0) @map("reconcile_check_count")
+  createdAt              DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  customer               AppUser               @relation(fields: [customerUserId], references: [id], onDelete: Restrict)
+  plan                   Plan                  @relation(fields: [planId], references: [id], onDelete: Restrict)
+  attempts               PaymentAttempt[]
+  grant                  EntitlementGrant?
+  webhookEvents          WebhookEvent[]
+
+  @@unique([customerUserId, idempotencyKey])
+  @@index([customerUserId, createdAt])
+  @@index([status, reconcileLastCheckedAt])
+  @@map("customer_order")
+}
+
+enum PaymentAttemptStatus {
+  authorised
+  captured
+  failed
+
+  @@map("payment_attempt_status")
+}
+
+enum PaymentSeenVia {
+  verify
+  webhook
+  reconciliation
+
+  @@map("payment_seen_via")
+}
+
+model PaymentAttempt {
+  id                String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId           String               @map("order_id") @db.Uuid
+  providerPaymentId String               @unique @map("provider_payment_id")
+  status            PaymentAttemptStatus
+  amountMinor       BigInt               @map("amount_minor")
+  currency          String
+  capturedAt        DateTime?            @map("captured_at") @db.Timestamptz(6)
+  /// Provider code only; no card or payment-method details are stored.
+  failureCode       String?              @map("failure_code")
+  firstSeenVia      PaymentSeenVia       @map("first_seen_via")
+  createdAt         DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  order             CustomerOrder        @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@map("payment_attempt")
+}
+
+enum WebhookEventStatus {
+  processed
+  ignored
+  needs_attention
+
+  @@map("webhook_event_status")
+}
+
+/// Inserted in the same transaction as its effects; invalid signatures are never stored (F-ORD-04).
+model WebhookEvent {
+  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  providerEventId   String             @unique @map("provider_event_id")
+  eventType         String             @map("event_type")
+  status            WebhookEventStatus
+  attentionReason   String?            @map("attention_reason")
+  relatedOrderId    String?            @map("related_order_id") @db.Uuid
+  relatedPaymentRef String?            @map("related_payment_ref")
+  payloadExcerpt    Json               @map("payload_excerpt")
+  receivedAt        DateTime           @default(now()) @map("received_at") @db.Timestamptz(6)
+  relatedOrder      CustomerOrder?     @relation(fields: [relatedOrderId], references: [id], onDelete: Restrict)
+
+  @@index([status, receivedAt])
+  @@map("webhook_event")
+}
+
+enum GrantStatus {
+  pending
+  granted
+  failed
+
+  @@map("grant_status")
+}
+
+model EntitlementGrant {
+  id             String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId        String        @unique @map("order_id") @db.Uuid
+  status         GrantStatus   @default(pending)
+  attemptCount   Int           @default(0) @map("attempt_count")
+  nextAttemptAt  DateTime?     @map("next_attempt_at") @db.Timestamptz(6)
+  lastError      String?       @map("last_error")
+  leaseOwner     String?       @map("lease_owner")
+  leaseToken     String?       @map("lease_token") @db.Uuid
+  leaseExpiresAt DateTime?     @map("lease_expires_at") @db.Timestamptz(6)
+  grantedAt      DateTime?     @map("granted_at") @db.Timestamptz(6)
+  failedAt       DateTime?     @map("failed_at") @db.Timestamptz(6)
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  order          CustomerOrder @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  entitlements   Entitlement[]
+
+  @@index([status, nextAttemptAt])
+  @@map("entitlement_grant")
+}
+
+model Entitlement {
+  id             String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  grantId        String           @map("grant_id") @db.Uuid
+  customerUserId String           @map("customer_user_id") @db.Uuid
+  entitlementKey String           @map("entitlement_key")
+  validFrom      DateTime         @default(now()) @map("valid_from") @db.Timestamptz(6)
+  /// Only if R13 defines time-limited plans; null means no expiry.
+  validUntil     DateTime?        @map("valid_until") @db.Timestamptz(6)
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  grant          EntitlementGrant @relation(fields: [grantId], references: [id], onDelete: Restrict)
+  customer       AppUser          @relation(fields: [customerUserId], references: [id], onDelete: Restrict)
+
+  @@unique([grantId, entitlementKey])
+  @@index([customerUserId, entitlementKey])
+  @@map("entitlement")
+}
+
+/// Run leases for in-process background tasks (DM §10.1): reconciliation, grant recovery, exports.
+model BackgroundTaskState {
+  taskName          String    @id @map("task_name")
+  leaseOwner        String?   @map("lease_owner")
+  leaseToken        String?   @map("lease_token") @db.Uuid
+  leaseExpiresAt    DateTime? @map("lease_expires_at") @db.Timestamptz(6)
+  lastRunStartedAt  DateTime? @map("last_run_started_at") @db.Timestamptz(6)
+  lastRunFinishedAt DateTime? @map("last_run_finished_at") @db.Timestamptz(6)
+
+  @@map("background_task_state")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Family tree PDF export (DM §7.6, Flows F-FAM-05). Owner only until R28/FQ-14/FQ-25 decide
+// genealogist or admin export. Generated files expire (FQ-11: retention is configuration).
+// ---------------------------------------------------------------------------------------------
+
+enum ExportJobStatus {
+  queued
+  running
+  ready
+  failed
+
+  @@map("export_job_status")
+}
+
+model ExportJob {
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String          @map("workspace_id") @db.Uuid
+  requestedByUserId String          @map("requested_by_user_id") @db.Uuid
+  status            ExportJobStatus @default(queued)
+  /// Validated layout options (mode, page size, orientation, label size, scope). No personal data.
+  options           Json
+  progress          Int             @default(0)
+  leaseOwner        String?         @map("lease_owner")
+  leaseToken        String?         @map("lease_token") @db.Uuid
+  leaseExpiresAt    DateTime?       @map("lease_expires_at") @db.Timestamptz(6)
+  fileId            String?         @map("file_id") @db.Uuid
+  expiresAt         DateTime?       @map("expires_at") @db.Timestamptz(6)
+  errorCode         String?         @map("error_code")
+  pageCount         Int?            @map("page_count")
+  memberCount       Int?            @map("member_count")
+  /// Non-blocking advice for the requester, e.g. that labels will be very small on one page.
+  warnings          Json?
+  startedAt         DateTime?       @map("started_at") @db.Timestamptz(6)
+  finishedAt        DateTime?       @map("finished_at") @db.Timestamptz(6)
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace         FamilyWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  requestedBy       AppUser         @relation(fields: [requestedByUserId], references: [id], onDelete: Restrict)
+  file              StoredFile?     @relation("ExportFile", fields: [fileId, workspaceId], references: [id, workspaceId], onDelete: Restrict)
+
+  @@unique([fileId, workspaceId])
+  @@index([workspaceId, requestedByUserId, createdAt])
+  @@index([status, leaseExpiresAt])
+  @@map("export_job")
+}

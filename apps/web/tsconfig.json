@@ -8,6 +8,9 @@
     "allowJs": false,
     "noEmit": true,
     "incremental": true,
+    "paths": { "@/*": ["./*"] },
+    // Lets unit tests import modules with explicit .ts extensions (Node's test runner). No emit here.
+    "allowImportingTsExtensions": true,
     "plugins": [{ "name": "next" }]
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts", ".next/dev/types/**/*.ts"],

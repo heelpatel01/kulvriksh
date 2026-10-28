@@ -1,0 +1,8 @@
+'use client';
+
+import { PortalError } from '@/components/portal/portal-error';
+
+export default function GenealogistError({ error, retry }: { error: unknown; retry: () => void }) {
+  const digest = error instanceof Error && 'digest' in error ? String(error.digest) : undefined;
+  return <PortalError retry={retry} homeHref="/genealogist" digest={digest} />;
+}

@@ -2,22 +2,34 @@
   "name": "@kulvriksh/api",
   "version": "0.0.0",
   "private": true,
-  "description": "Kulvriksh Express API (foundation shell: health endpoint only).",
+  "description": "Kulvriksh Express API: sign-in, profiles, family workspaces, research, audit and the service catalogue.",
   "type": "module",
   "scripts": {
-    "dev": "node --env-file-if-exists=.env --watch src/server.ts",
-    "build": "tsc -p tsconfig.build.json",
+    "generate": "prisma generate",
+    "dev": "prisma generate && node --env-file-if-exists=.env --watch src/server.ts",
+    "build": "prisma generate && tsc -p tsconfig.build.json",
     "start": "node --env-file-if-exists=.env dist/server.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "prisma generate && tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
-    "test": "node --test \"src/**/*.test.ts\""
+    "test": "prisma generate && node --test \"src/**/*.test.ts\"",
+    "test:db": "prisma generate && node --env-file=.env --test \"src/**/*.db.test.ts\"",
+    "migrate:create": "prisma migrate dev --create-only",
+    "cleanup": "prisma generate && node --env-file=.env src/tools/cleanup.ts",
+    "dev:staff": "prisma generate && node --env-file=.env src/tools/dev-staff.ts",
+    "bootstrap:admin": "prisma generate && node --env-file=.env src/tools/bootstrap-admin.ts",
+    "bench:export": "node src/tools/export-bench.ts"
   },
   "dependencies": {
-    "express": "5.3.0"
+    "@prisma/adapter-pg": "7.10.0",
+    "@prisma/client": "7.10.0",
+    "express": "5.3.0",
+    "harfbuzzjs": "1.6.3",
+    "pg": "8.23.1"
   },
   "devDependencies": {
     "@kulvriksh/shared": "0.0.0",
     "@types/express": "5.0.6",
-    "@types/node": "24.19.2"
+    "@types/node": "24.19.2",
+    "prisma": "7.10.0"
   }
 }

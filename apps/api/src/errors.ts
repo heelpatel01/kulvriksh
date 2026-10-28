@@ -5,14 +5,17 @@ import { getRequestId } from './middleware.ts';
 
 const CLIENT_ERROR_CODES: Record<number, string> = {
   400: 'BAD_REQUEST',
+  401: 'UNAUTHORIZED',
+  403: 'FORBIDDEN',
   404: 'NOT_FOUND',
   405: 'METHOD_NOT_ALLOWED',
+  409: 'CONFLICT',
   413: 'PAYLOAD_TOO_LARGE',
   415: 'UNSUPPORTED_MEDIA_TYPE',
 };
 
-export function errorBody(code: string, message: string, requestId: string): ApiErrorBody {
-  return { error: { code, message, requestId } };
+export function errorBody(code: string, message: string, requestId: string, fields?: Record<string, string>): ApiErrorBody {
+  return { error: { code, message, requestId, ...(fields ? { fields } : {}) } };
 }
 
 function statusOf(err: unknown): number | undefined {

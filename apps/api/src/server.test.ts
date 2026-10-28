@@ -63,6 +63,15 @@ test('invalid configuration stops startup with exit code 1 and a structured erro
   assert.doesNotMatch(result.stdout, /listening/);
 });
 
+test('an invalid DATABASE_URL stops startup without printing the connection string', { timeout: TIMEOUT_MS }, async () => {
+  const result = await startApi({ DATABASE_URL: 'postgresql://u:sample-pw-not-real@db.example.com:5432/kulvriksh' }).exited;
+  assert.equal(result.code, 1);
+  const [entry] = jsonLines(result.stderr);
+  assert.equal(entry?.msg, 'configuration error');
+  assert.match(String((entry?.issues as string[])[0]), /loopback host/);
+  assert.doesNotMatch(result.stdout + result.stderr, /sample-pw-not-real|db\.example\.com/);
+});
+
 test('starts, logs a structured "listening" line and serves /health', { timeout: TIMEOUT_MS }, async () => {
   const port = await freePort();
   const { child, output, exited } = startApi({ API_PORT: String(port) });

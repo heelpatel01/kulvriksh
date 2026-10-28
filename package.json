@@ -22,7 +22,19 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "check": "npm run typecheck && npm run lint && npm run test && npm run build"
+    "check": "npm run typecheck && npm run lint && npm run test && npm run build",
+    "db:init": "node scripts/local-db.mjs init",
+    "db:start": "node scripts/local-db.mjs start",
+    "db:stop": "node scripts/local-db.mjs stop",
+    "db:status": "node scripts/local-db.mjs status",
+    "db:migrate": "node scripts/local-db.mjs migrate",
+    "db:secrets": "node scripts/local-db.mjs secrets",
+    "db:backup": "node scripts/local-db.mjs backup",
+    "db:restore-check": "node scripts/local-db.mjs restore-check",
+    "db:cleanup": "npm run cleanup -w @kulvriksh/api --",
+    "dev:staff": "npm run dev:staff -w @kulvriksh/api --",
+    "bootstrap:admin": "npm run bootstrap:admin -w @kulvriksh/api --",
+    "test:db": "npm run test:db -w @kulvriksh/api"
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",

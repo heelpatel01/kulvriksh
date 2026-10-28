@@ -2,13 +2,14 @@
   "name": "@kulvriksh/web",
   "version": "0.0.0",
   "private": true,
-  "description": "Kulvriksh Next.js web app (foundation shell: placeholder page only).",
+  "description": "Kulvriksh Next.js web app: public site and portals (local preview), with live services and customer sign-in.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "typecheck": "next typegen && tsc --noEmit",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test": "node --test \"lib/**/*.test.ts\""
   },
   "dependencies": {
     "next": "16.4.2",

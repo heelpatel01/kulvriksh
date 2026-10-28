@@ -1,6 +1,7 @@
 {
-  // Production build: compile the API without tests or test helpers.
+  // Production build: compile the API without tests, test helpers or development-only tools
+  // (the staff provisioning command must not exist in a production build).
   // Type-checking (tsconfig.json) still covers them.
   "extends": "./tsconfig.json",
-  "exclude": ["src/**/*.test.ts", "src/testing"]
+  "exclude": ["src/**/*.test.ts", "src/testing", "src/tools/dev-staff.ts"]
 }
